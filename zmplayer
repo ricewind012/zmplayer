@@ -1,0 +1,202 @@
+#!/usr/bin/env zsh
+
+warn() {
+	printf '%s:%d: %s%s\n' $1 ${(%):-%i} ${3:+$3: } $2 >&2
+}
+
+tui::redraw() {
+	printf '%s\n' ${@:-$listdraw}
+	tui::statusbar
+}
+
+tui::cursor_pos() {
+	typeset -gi y=1 x=1
+
+	printf '\e[6n'
+	IFS='[;' read -d R -rs _ y x _
+}
+
+tui::statusbar() {
+	printf '\e7\e[%dH\e[?7l\e[7m%s%s\e[m\e[?7h\e8' \
+		$(( LINES - 1 )) $1 ${(l:COLUMNS - $#1:)2}
+}
+
+tui::cmdline() {
+	local cmdtext=$1
+
+	printf '\e7\e[%dH' $LINES
+
+	if (( $#1 == 1 )) {
+		printf '\e[?25h%c' $1
+		read -r cmdtext
+
+		# TODO history, /
+		case $1 {
+			/) tui::redraw ${(M)listdraw[1,max]:#$~cmdtext} ;;
+			:) ${(z)cmdtext// % #/ $listdraw[$y] } ;;
+		}
+
+		printf '\e[K\e[?25l\e8'
+	} else {
+		printf '%s\e8' $1
+		{ sleep 5; printf '\e7\e[%dH\e[K\e8' $LINES; } &
+	}
+}
+
+tui::key() {
+	if [[ $1 == $'\e' ]] {
+		read -rsk2
+		local special=$1$REPLY
+		1=$special
+	}
+
+	case ${special:-$1} {
+		# Down | Up
+		$'\e[A'|$'\e[B')
+			# TODO: move this shit in the loop
+			tui::cursor_pos
+
+			printf '%b' $special
+			printf '\e7\e[7m%s\e[m\e8' \
+				${(r:COLUMNS:)listdraw[y+1]}
+		;;
+
+		# Enter
+		$'\n')
+			tui::cmdline $listdraw[$y]
+			tui::statusbar "$status: $listdraw[$y]" $duration
+		;;
+
+		# q | Ctrl-D
+		q|$'\004')
+			exit
+		;;
+
+		[/:])
+			tui::cmdline $1
+		;;
+	}
+}
+
+file::check() {
+	local msg
+
+	[[ -s $1 ]] ||
+		msg='empty file'
+	[[ -r $1 ]] ||
+		msg='permission denied'
+	[[ -f $1 || -d $1 ]] ||
+		msg='no such file or directory'
+
+	if [[ $msg ]] {
+		warn $0 $1 $msg
+		return 1
+	}
+}
+
+file::play() {
+	local -i sr=$(ffprobe -v error -select_streams a \
+		-of default=noprint_wrappers=1:nokey=1 \
+		-show_entries stream=sample_rate $1)
+
+	ffmpeg -nostdin -v warning \
+		-stats_period 1 -progress $progdir/progress \
+		-i $1 -f wav -acodec pcm_s16le - |
+	aplay -c 2 -t raw -r ${sr:-44100} -f s16_le - &
+	typeset -gi pid=$!
+}
+
+usage() {
+	<<-EOF >&2
+	Usage: ${ZSH_ARGZERO##*/} [-$progopts] [files|dir]
+
+	-d Report cursor position and key presses
+	EOF
+	exit 2
+}
+
+main() {
+	typeset -gi max=$(( LINES - 2 ))
+	typeset -gA opts list
+	local -i OPTIND i
+	local opt OPTARG f
+	local progopts=d
+	progdir=${TMPDIR:=/tmp}/${ZSH_ARGZERO##*/}
+	setopt extendedglob nullglob
+
+	while getopts $progopts opt; do case $opt in
+		[h?]) usage ;;
+		*) opts[$opt]=${OPTARG:-1} ;;
+	esac; done; shift $(( OPTIND - 1 ))
+
+	[[ -d $progdir ]] || mkdir -p $sdir
+	[[ $1 ]] || usage
+
+	if (( $# > 1 )) || [[ -d $1 ]] {
+		for arg {
+			if [[ -d $arg ]] {
+				file::check $1 || continue
+
+				for f ($arg/**/*.(#i)(aac|aiff#|[af]lac|ape|m4[abr]|mpc|og[agmvx]|opus|tta|wa#v)(.))
+					list[$f]=${${f//$arg\/}%.*}
+
+				(( $#list )) ||
+					warn $0 'no files' $1
+			} elif [[ -f $arg ]] {
+				list[$f]=${${f##*/}%.*}
+			}
+			for f ($list) {
+				(( i++ >= max - 1 )) && break
+				listdraw+=($f)
+			}
+		}
+		(( $#list )) || exit 1
+
+		# CSI ? 1049[hl]: Use (alternative|normal) screen buffer
+		# CSI ? 7 l     : No auto-wrap mode
+		# CSI ? 25 l    : Hide cursor
+		# CSI Ps ; Ps r : Set scrolling region (top;bottom)
+		printf '\e[?1049h\e[?7l\e[?25l\e[;%dr' $max
+		# CSI 22 ; 2 t  : Save window title on stack
+		# OSC 2 ; Pt ST : Change window title to Pt
+		printf '\e[22;2t\e]2;%s\a' ${ZSH_ARGZERO##*/}
+		# CSI 23 ; 2 t  : Restore window title from stack
+		trap "printf '\e[?1049l\e[?7h\e[?25h\e[;r\e[23;2t'" \
+			INT EXIT
+		trap tui::redraw WINCH
+		tui::redraw
+		tui::cursor_pos
+		printf '\e[H\e[7m%s\e[m\e[H' ${(r:COLUMNS:)listdraw[y]}
+
+		for (( ;; )) {
+			read -srk1 && {
+				tui::key $REPLY
+				tui::cursor_pos
+
+				(( opts[d] )) && tui::statusbar \
+					"cursor: ${y}x${x}" "key: ${${(qqqq)REPLY}#$}"
+			}
+
+			[[ -t 1 ]] || exit 1
+		}
+	} else {
+		file::check $1 || exit 1
+
+		local duration
+		duration=$(ffprobe -v error -select_streams a \
+			-of default=noprint_wrappers=1:nokey=1 \
+			-show_entries stream=duration -sexagesimal $1) ||
+			exit 1
+		duration=${duration#00#:}
+
+		printf '\e[?25l%s\n\e7' ${1##*/}
+		trap 'printf "\e[?25h\n"' INT EXIT
+		file::play $1 2>&1 |
+			while read -r l; do case $l in out_time=?*)
+				printf 'Duration: %s/%s' \
+					${${${l##*=}%.*}#00:} ${duration%.*}
+			esac; done
+	}
+}
+
+main $@
