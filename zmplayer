@@ -1,9 +1,5 @@
 #!/usr/bin/env zsh
 
-warn() {
-	printf '%s:%d: %s%s\n' $1 ${(%):-%i} ${3:+$3: } $2 >&2
-}
-
 tui::redraw() {
 	printf '%s\n' ${@:-$list}
 	tui::statusbar
@@ -110,6 +106,10 @@ file::play() {
 	typeset -gi pid=$!
 }
 
+warn() {
+	printf '%s:%d: %s%s\n' $1 ${(%):-%i} ${3:+$3: } $2 >&2
+}
+
 usage() {
 	<<-EOF >&2
 	Usage: ${ZSH_ARGZERO##*/} [-$progopts] [files|dir]
@@ -123,7 +123,7 @@ main() {
 	typeset -gi max=$(( LINES - 2 ))
 	typeset -gA opts
 	local -i OPTIND
-	local opt OPTARG f
+	local opt OPTARG arg f
 	local progopts=d
 	progdir=${TMPDIR:=/tmp}/${ZSH_ARGZERO##*/}
 	setopt extendedglob nullglob
@@ -143,14 +143,14 @@ main() {
 
 				for f ($arg/**/*.(#i)(aac|aiff#|[af]lac|ape|m4[abr]|mpc|og[agmvx]|opus|tta|wa#v)(.))
 					list+=($f)
-
-				(( $#list )) ||
-					warn $0 'no files' $1
 			} elif [[ -f $arg ]] {
 				list+=($arg)
 			}
 		}
-		(( $#list )) || exit 1
+		if (( ! $#list )) {
+			warn $0 'no files' $1
+			exit 1
+		}
 
 		# CSI ? 1049[hl]: Use (alternative|normal) screen buffer
 		# CSI ? 7 l     : No auto-wrap mode
