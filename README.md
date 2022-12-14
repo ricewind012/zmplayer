@@ -6,7 +6,7 @@ Music player in zsh
 
 ## todo
 ### essential
-- [ ] playing
+- [x] playing
 - [ ] controls
 - [ ] scrolling
 
