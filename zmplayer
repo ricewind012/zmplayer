@@ -30,7 +30,6 @@ tui::cmdline() {
 		printf '\e[?25h%c' $1
 		read -r cmdtext
 
-		# TODO history, /
 		case $1 {
 			/) tui::redraw ${(M)list[1,max]:#$~cmdtext} ;;
 			:) ${(z)cmdtext// % #/ $list[$y] } ;;

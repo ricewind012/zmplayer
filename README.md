@@ -12,6 +12,6 @@ Music player in zsh
 
 ### later
 - [ ] (a bit of) extensibility
-- [ ] commands, etc.
+- [ ] commands, search, etc.
 - [ ] read from file
 - [ ] options
