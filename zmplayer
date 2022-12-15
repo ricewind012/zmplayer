@@ -133,6 +133,11 @@ main() {
 		*) opts[$opt]=${OPTARG:-1} ;;
 	esac; done; shift $(( OPTIND - 1 ))
 
+	for f (aplay ff{mpeg,probe})
+		if (( ! $+commands[$f] )) {
+			warn $0 'command not found' $f
+			exit 1
+		}
 	[[ -d $progdir ]] || mkdir -p $progdir
 	[[ $1 ]] || usage
 
