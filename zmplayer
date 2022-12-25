@@ -1,8 +1,14 @@
 #!/usr/bin/env zsh
 
 tui::redraw() {
-	printf '%s\n' ${@:-$list}
-	tui::statusbar
+	local -i i=$y
+	local fmt
+
+	printf '\e[2J\e[H'
+	for (( ; i <= y + maxl; i++ )) {
+		(( i == y )) && fmt='\e[7m%s\e[m\n' || fmt='%s\n'
+		printf $fmt ${list[$i]##*/}
+	}
 }
 
 tui::cursor_pos() {
@@ -13,7 +19,7 @@ tui::cursor_pos() {
 }
 
 tui::statusbar() {
-	printf '\e7\e[%dH\e[?7l\e[7m%s%s\e[m\e[?7h\e8' \
+	printf '\e7\e[%dH\e[7m%s%s\e[m\e8' \
 		$(( LINES - 1 )) $1 ${(l:COLUMNS - $#1:)2}
 }
 
@@ -24,10 +30,12 @@ tui::cmdline() {
 
 	if (( $#1 == 1 )) {
 		printf '\e[?25h%c' $1
+		stty echo
 		read -r cmdtext
+		stty -echo
 
 		case $1 {
-			/) tui::redraw ${(M)list[1,max]:#$~cmdtext} ;;
+			/) tui::redraw ${(M)list:#$~cmdtext} ;;
 			:) ${(z)cmdtext// % #/ $list[$y] } ;;
 		}
 
@@ -46,19 +54,25 @@ tui::key() {
 	}
 
 	case ${special:-$1} {
-		# Down | Up
-		$'\e[A'|$'\e[B')
-			# TODO: move this shit in the loop
-			tui::cursor_pos
+		# Up
+		$'\e[A')
+			(( y == 1 )) && return
 
-			printf '%b' $special
-			printf '\e7\e[7m%s\e[m\e8' \
-				${(r:COLUMNS:)list[y+1]}
+			(( --y ))
+			tui::redraw
+		;;
+
+		# Down
+		$'\e[B')
+			(( y == $#list )) && return
+
+			(( ++y ))
+			tui::redraw
 		;;
 
 		# Enter
 		$'\n')
-			tui::statusbar "Selected $list[$y]"
+			tui::cmdline "Selected ${list[$y]##*/}"
 			file::play $list[$y]
 		;;
 
@@ -120,7 +134,7 @@ usage() {
 }
 
 main() {
-	typeset -gi max=$(( LINES - 2 ))
+	typeset -gi maxl=$(( LINES - 3 )) y=1
 	typeset -gA opts
 	local -i OPTIND
 	local opt OPTARG arg f
@@ -157,6 +171,8 @@ main() {
 			exit 1
 		}
 
+		# Disable input printing
+		stty -echo
 		# CSI ? 1049[hl]: Use (alternative|normal) screen buffer
 		# CSI ? 7 l     : No auto-wrap mode
 		# CSI ? 25 l    : Hide cursor
@@ -170,16 +186,14 @@ main() {
 			INT EXIT
 		trap tui::redraw WINCH
 		tui::redraw
-		tui::cursor_pos
-		printf '\e[H\e[7m%s\e[m\e[H' ${(r:COLUMNS:)list[$y]}
+		tui::statusbar
 
 		for (( ;; )) {
 			read -srk1 && {
 				tui::key $REPLY
-				tui::cursor_pos
 
 				(( opts[d] )) && tui::statusbar \
-					"cursor: ${y}x${x}" "key: ${${(qqqq)REPLY}#$}"
+					"cursor: $y" "key: ${${(qqqq)REPLY}#$}"
 			}
 
 			[[ -t 1 ]] || exit 1
