@@ -147,66 +147,47 @@ main() {
 	[[ -d $progdir ]] || mkdir -p $progdir
 	[[ $1 ]] || usage
 
-	if (( $# > 1 )) || [[ -d $1 ]] {
-		for arg {
-			if [[ -d $arg ]] {
-				file::check $1 || continue
+	for arg {
+		if [[ -d $arg ]] {
+			file::check $1 || continue
 
-				for f ($arg/**/*.(#i)(aac|aiff#|[af]lac|ape|m4[abr]|mpc|og[agmvx]|opus|tta|wa#v)(.))
-					list+=($f)
-			} elif [[ -f $arg ]] {
-				list+=($arg)
-			}
+			for f ($arg/**/*.(#i)(aac|aiff#|[af]lac|ape|m4[abr]|mpc|og[agmvx]|opus|tta|wa#v)(.))
+				list+=($f)
+		} elif [[ -f $arg ]] {
+			list+=($arg)
 		}
-		if (( ! $#list )) {
-			warn $0 'no files' $1
-			exit 1
+	}
+	if (( ! $#list )) {
+		warn $0 'no files' $1
+		exit 1
+	}
+
+	# Disable input printing
+	stty -echo
+	# CSI ? 1049[hl]: Use (alternative|normal) screen buffer
+	# CSI ? 7 l     : No auto-wrap mode
+	# CSI ? 25 l    : Hide cursor
+	# CSI Ps ; Ps r : Set scrolling region (top;bottom)
+	printf '\e[?1049h\e[?7l\e[?25l\e[;%dr' $max
+	# CSI 22 ; 2 t  : Save window title on stack
+	# OSC 2 ; Pt ST : Change window title to Pt
+	printf '\e[22;2t\e]2;%s\a' ${ZSH_ARGZERO##*/}
+	# CSI 23 ; 2 t  : Restore window title from stack
+	trap 'printf "\e[?1049l\e[?7h\e[?25h\e[;r\e[23;2t"; (( pid )) && kill $pid' \
+		INT EXIT
+	trap tui::redraw WINCH
+	tui::redraw
+	tui::statusbar
+
+	for (( ;; )) {
+		read -srk1 && {
+			tui::key $REPLY
+
+			(( opts[d] )) && tui::statusbar \
+				"cursor: $y" "key: ${${(qqqq)REPLY}#$}"
 		}
 
-		# Disable input printing
-		stty -echo
-		# CSI ? 1049[hl]: Use (alternative|normal) screen buffer
-		# CSI ? 7 l     : No auto-wrap mode
-		# CSI ? 25 l    : Hide cursor
-		# CSI Ps ; Ps r : Set scrolling region (top;bottom)
-		printf '\e[?1049h\e[?7l\e[?25l\e[;%dr' $max
-		# CSI 22 ; 2 t  : Save window title on stack
-		# OSC 2 ; Pt ST : Change window title to Pt
-		printf '\e[22;2t\e]2;%s\a' ${ZSH_ARGZERO##*/}
-		# CSI 23 ; 2 t  : Restore window title from stack
-		trap 'printf "\e[?1049l\e[?7h\e[?25h\e[;r\e[23;2t"; (( pid )) && kill $pid' \
-			INT EXIT
-		trap tui::redraw WINCH
-		tui::redraw
-		tui::statusbar
-
-		for (( ;; )) {
-			read -srk1 && {
-				tui::key $REPLY
-
-				(( opts[d] )) && tui::statusbar \
-					"cursor: $y" "key: ${${(qqqq)REPLY}#$}"
-			}
-
-			[[ -t 1 ]] || exit 1
-		}
-	} else {
-		file::check $1 || exit 1
-
-		local duration
-		duration=$(ffprobe -v error -select_streams a \
-			-of default=noprint_wrappers=1:nokey=1 \
-			-show_entries stream=duration -sexagesimal $1) ||
-			exit 1
-		duration=${duration#00#:}
-
-		printf '\e[?25l%s\n\e7' ${1##*/}
-		trap 'printf "\e[?25h\n"' INT EXIT
-		file::play $1 2>&1 |
-			while read -r l; do case $l in out_time=?*)
-				printf 'Duration: %s/%s' \
-					${${${l##*=}%.*}#00:} ${duration%.*}
-			esac; done
+		[[ -t 1 ]] || exit 1
 	}
 }
 
