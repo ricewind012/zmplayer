@@ -29,7 +29,27 @@ tui::cmdline() {
 
 		case $1 {
 			/) tui::redraw ${(M)list:#$~cmdtext} ;;
-			:) ${(z)cmdtext// % #/ $list[$y] } ;;
+
+			:)
+				cmdtext=(${cmdtext%%[[:space:]]*} ${cmdtext#?[[:space:]]})
+
+				printf '\e7\e[%dH\e[K\e8' $LINES
+				tui::redraw
+
+				case $cmdtext[1] {
+					!) ${(z)cmdtext[2]// % #/ ${(qq)playing} } ;;
+
+					j)
+						file::is_playing &&
+							file::play $playing $cmdtext[2]
+					;;
+
+					*)
+						tui::cmdline 'No such command'
+						return
+					;;
+				}
+			;;
 		}
 
 		printf '\e[K\e[?25l\e8'
@@ -62,10 +82,43 @@ tui::key() {
 			tui::redraw
 		;;
 
+		$'\e['[DC]|[ps])
+			file::is_playing || return 1
+		;|
+
+		# Left
+		$'\e[D')
+			file::play $playing -5
+		;;
+
+		# Right
+		$'\e[C')
+			file::play $playing +5
+		;;
+
+		# p
+		p)
+			local sig; (( paused )) && sig=CONT || sig=STOP
+			paused=$(( paused ? 0 : 1 ))
+
+			kill -$sig $pid[aplay]
+		;;
+
+		# s
+		s)
+			unset playing
+			(( stopped )) && tui::key p
+
+			kill $pid[aplay]
+		;;
+
 		# Enter
 		$'\n')
-			tui::cmdline "Selected ${list[$y]##*/}"
-			file::play $list[$y]
+			playing=$list[$y]
+			paused=0
+
+			tui::cmdline "Selected ${playing##*/}"
+			file::play $playing
 		;;
 
 		# q | Ctrl-D
@@ -95,21 +148,72 @@ file::check() {
 	}
 }
 
+file::is_playing() {
+	if (( ! $+playing )) {
+		tui::cmdline 'Not currently playing'
+		return 1
+	}
+}
+
+file::read_entries() {
+	local -i i
+	local output=("${(f)$(ffprobe -v error \
+		-of default=nw=1 -show_streams $playing)}")
+
+	for (( i = 1; i <= $#output; i++ ))
+		entry[${output[$i]%%=*}]=${output[$i]#*=}
+	printf -v 'entry[duration]' '%.0f' $entry[duration]
+}
+
 file::play() {
-	local -i sr=$(ffprobe -v error -select_streams a \
-		-of default=noprint_wrappers=1:nokey=1 \
-		-show_entries stream=sample_rate $1)
+	# https://ffmpeg.org/ffmpeg-utils.html#Examples-1
+	[[ $2 == [+-]([0-9]|[0-9](#c2):[0-9](#c2)(:[0-9](#c2))#)##(.[0-9]##|[mu]s)# ]] &&
+		if [[ $2 == [+-]* ]] {
+			local -i durationp
+			local operation=${2[1]}
+			read -r durationp < $progdir/duration
+			durationp=$((
+				entry[duration] - (entry[duration] - durationp)
+			))
 
-	(( pid )) && kill $pid
+			2=$(( durationp $operation 5 ))
+			2=$(( $2 < 0 ? 0 : $2 ))
+			2=$(( $2 > entry[duration] ? entry[duration] : $2 ))
+			(( durationr $operation= 5 ))
+		} else {
+			tui::cmdline 'Wrong time duration'
+			return 2
+		}
 
+	file::read_entries
+	[[ -f $progdir/progress ]] || :> $progdir/progress
+
+	(( pid[aplay] )) && kill $pid[aplay]
 	ffmpeg -nostdin -v warning \
-		-stats_period 1 -progress $progdir/progress \
-		-i $1 -f wav -acodec pcm_s16le - \
-	2>>$progdir/ffmpeg-$$.log |
-		aplay -q -c 2 -t raw -r ${sr:-44100} -f s16_le - \
-	2>>$progdir/aplay-$$.log &
+		-progress $progdir/progress \
+		${=2:+-ss $durationr} -i $1 -f wav -acodec pcm_s16le - \
+	2>>$progdir/ffmpeg.log |
+		aplay -q -c 2 -t raw -r $entry[sample_rate] -f s16_le - \
+	2>>$progdir/aplay.log &
+	assign_pid aplay
 
-	typeset -gi pid=$!
+	(( pid[tail] )) && return
+	coproc tail -f $progdir/progress 2>/dev/null
+	assign_pid tail
+	while read -p; do case $REPLY in out_time_ms=?*)
+		# Says ms, but is actually us
+		# real or fake
+		printf '%d' $(( ${REPLY##*=} / 1000000 )) \
+			> $progdir/duration
+		tui::statusbar ${playing##*/} \
+			$(( ${REPLY##*=} / 1000000 ))/$entry[duration]
+	esac; done &
+	assign_pid loop
+}
+
+assign_pid() {
+	local -i current=$!
+	pid[$1]=$current
 }
 
 warn() {
@@ -127,7 +231,7 @@ usage() {
 
 main() {
 	typeset -gi maxl=$(( LINES - 3 )) y=1
-	typeset -gA opts
+	typeset -gA opts pid entry
 	local -i OPTIND
 	local opt OPTARG arg f
 	local progopts=d
@@ -173,7 +277,7 @@ main() {
 	# OSC 2 ; Pt ST : Change window title to Pt
 	printf '\e[22;2t\e]2;%s\a' ${ZSH_ARGZERO##*/}
 	# CSI 23 ; 2 t  : Restore window title from stack
-	trap 'printf "\e[?1049l\e[?7h\e[?25h\e[;r\e[23;2t"; (( pid )) && kill $pid' \
+	trap 'printf "\e[?1049l\e[?7h\e[?25h\e[;r\e[23;2t"; (( $#pid )) && kill $pid' \
 		INT EXIT
 	trap tui::redraw WINCH
 	tui::redraw

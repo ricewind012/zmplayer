@@ -7,12 +7,12 @@ Music player in zsh
 ## Dependencies
 - alsa
 - ffmpeg
-- ffprobe (for finding the sample rate)
+- ffprobe
 
 ## todo
 ### essential
 - [x] playing
-- [ ] controls
+- [x] controls
 - [ ] scrolling
 
 ### later
